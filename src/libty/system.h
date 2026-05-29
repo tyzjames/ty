@@ -12,9 +12,10 @@
 #define TY_SYSTEM_H
 
 #include "common.h"
+#include "../libhs/platform.h"
 #include <sys/types.h>
 
-TY_C_BEGIN
+_HS_BEGIN_C
 
 #ifdef _WIN32
     #define TY_PATH_SEPARATORS "\\/"
@@ -58,15 +59,6 @@ enum {
     TY_TERMINAL_SILENT = 0x2
 };
 
-#ifdef _WIN32
-char *ty_win32_strerror(unsigned long err);
-#endif
-
-uint64_t ty_millis(void);
-void ty_delay(unsigned int ms);
-
-int ty_adjust_timeout(int timeout, uint64_t start);
-
 void ty_descriptor_set_clear(ty_descriptor_set *set);
 void ty_descriptor_set_add(ty_descriptor_set *set, ty_descriptor desc, int id);
 void ty_descriptor_set_remove(ty_descriptor_set *set, int id);
@@ -88,6 +80,6 @@ bool ty_compare_paths(const char *path1, const char *path2);
 int ty_terminal_setup(int flags);
 void ty_terminal_restore(void);
 
-TY_C_END
+_HS_END_C
 
 #endif

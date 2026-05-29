@@ -11,12 +11,12 @@
 #ifndef TY_CLASS_PRIV_H
 #define TY_CLASS_PRIV_H
 
-#include "common_priv.h"
+#include "common.h"
 #include "board.h"
 #include "class.h"
 #include "../libhs/match.h"
 
-TY_C_BEGIN
+_HS_BEGIN_C
 
 struct _ty_class_vtable {
     int (*load_interface)(ty_board_interface *iface);
@@ -30,7 +30,7 @@ struct _ty_class_vtable {
     ssize_t (*serial_write)(ty_board_interface *iface, const char *buf, size_t size);
     int (*upload)(ty_board_interface *iface, struct ty_firmware *fw,
                   ty_board_upload_progress_func *pf, void *udata);
-    int (*reset)(ty_board_interface *iface);
+    int (*reset)(ty_board_interface *iface, int64_t rtc_time);
     int (*reboot)(ty_board_interface *iface);
 };
 
@@ -45,6 +45,6 @@ extern const unsigned int _ty_classes_count;
 extern const hs_match_spec *_ty_class_match_specs;
 extern unsigned int _ty_class_match_specs_count;
 
-TY_C_END
+_HS_END_C
 
 #endif

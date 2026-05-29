@@ -8,7 +8,7 @@
 
    See the LICENSE file for more details. */
 
-#include "common_priv.h"
+#include "common.h"
 #include "../libhs/device.h"
 #include "../libhs/array.h"
 #include "../libhs/monitor.h"
@@ -55,10 +55,10 @@ static int change_board_status(ty_board *board, ty_board_status status, ty_monit
     // Set new board status, engage drop timer if needed
     if (status == TY_BOARD_STATUS_MISSING && status != board->status) {
         board->status = TY_BOARD_STATUS_MISSING;
-        board->missing_since = ty_millis();
+        board->missing_since = hs_millis();
 
         if (!monitor->timer_running) {
-            int timer_delay = ty_adjust_timeout(monitor->drop_delay, board->missing_since);
+            int timer_delay = hs_adjust_timeout(monitor->drop_delay, board->missing_since);
             r = ty_timer_set(monitor->timer, timer_delay, TY_TIMER_ONESHOT);
             if (r < 0)
                 return r;
@@ -107,6 +107,7 @@ static int create_board(ty_monitor *monitor, ty_board_interface *iface, ty_board
         r = ty_error(TY_ERROR_MEMORY, NULL);
         goto error;
     }
+    board->match_iface = -1;
 
     r = ty_mutex_init(&board->ifaces_lock);
     if (r < 0)
@@ -178,30 +179,6 @@ static void drop_board(ty_board *board)
     }
 }
 
-static ty_board *find_monitor_board(ty_monitor *monitor, const char *location)
-{
-    for (size_t i = 0; i < monitor->boards.count; i++) {
-        ty_board *board_it = monitor->boards.values[i];
-
-        if (strcmp(board_it->location, location) == 0)
-            return board_it;
-    }
-
-    return NULL;
-}
-
-static ty_board_interface *find_monitor_interface(ty_monitor *monitor, hs_device *dev)
-{
-   _hs_htable_foreach_hash(cur, &monitor->ifaces, _hs_htable_hash_ptr(dev)) {
-        ty_board_interface *iface = ty_container_of(cur, ty_board_interface, monitor_hnode);
-
-        if (iface->dev == dev)
-            return iface;
-    }
-
-    return NULL;
-}
-
 static int open_new_interface(hs_device *dev, ty_board_interface **riface)
 {
     const struct _ty_class_vtable *class_vtable;
@@ -242,16 +219,47 @@ error:
     return r;
 }
 
-static int update_or_create_board(ty_monitor *monitor, ty_board_interface *iface,
-                                  ty_board **rboard, ty_monitor_event *revent)
+static int register_board_interface(ty_board *board, ty_board_interface *iface)
 {
-    ty_board *board;
-    ty_monitor_event event;
     int r;
 
-    board = find_monitor_board(monitor, iface->dev->location);
+    ty_mutex_lock(&board->ifaces_lock);
 
-    if (board) {
+    // Add interface to board
+    r = _hs_array_push(&board->ifaces, iface);
+    if (r < 0) {
+        r = ty_libhs_translate_error(r);
+        goto cleanup;
+    }
+    ty_board_interface_ref(iface);
+
+    // Update board capabilities
+    for (int i = 0; i < (int)_HS_COUNTOF(board->cap2iface); i++) {
+        if (iface->capabilities & (1 << i))
+            board->cap2iface[i] = iface;
+    }
+    board->capabilities |= iface->capabilities;
+
+    r = 0;
+cleanup:
+    ty_mutex_unlock(&board->ifaces_lock);
+    return r;
+}
+
+static int update_or_create_board(ty_monitor *monitor, ty_board_interface *iface)
+{
+    bool found = false;
+    int r;
+
+    for (size_t i = 0; i < monitor->boards.count; i++) {
+        ty_board *board = monitor->boards.values[i];
+
+        if (strcmp(board->location, iface->dev->location) != 0)
+            continue;
+        if (board->match_iface >= 0 && iface->dev->type == HS_DEVICE_TYPE_SERIAL &&
+                                       iface->dev->iface_number != board->match_iface)
+            continue;
+
         // Update board information
         bool update_tag_pointer = false;
         if (board->tag == board->id)
@@ -276,7 +284,11 @@ static int update_or_create_board(ty_monitor *monitor, ty_board_interface *iface
                 board->pid = iface->dev->pid;
             }
 
-            event = TY_MONITOR_EVENT_CHANGED;
+            r = register_board_interface(board, iface);
+            if (r < 0)
+                return r;
+
+            change_board_status(board, TY_BOARD_STATUS_ONLINE, TY_MONITOR_EVENT_CHANGED);
         } else {
             if (board->status == TY_BOARD_STATUS_ONLINE)
                 close_board(board);
@@ -286,128 +298,127 @@ static int update_or_create_board(ty_monitor *monitor, ty_board_interface *iface
             r = create_board(monitor, iface, &board);
             if (r <= 0)
                 return r;
+            r = register_board_interface(board, iface);
+            if (r < 0)
+                return r;
 
-            event = TY_MONITOR_EVENT_ADDED;
+            change_board_status(board, TY_BOARD_STATUS_ONLINE, TY_MONITOR_EVENT_ADDED);
         }
-    } else {
+
+        if (!found)
+            iface->board = board;
+
+        found = true;
+    }
+
+    if (!found) {
+        ty_board *board;
+
         r = create_board(monitor, iface, &board);
         if (r <= 0)
             return r;
+        r = register_board_interface(board, iface);
+        if (r < 0)
+            return r;
 
-        event = TY_MONITOR_EVENT_ADDED;
+        iface->board = board;
+
+        change_board_status(board, TY_BOARD_STATUS_ONLINE, TY_MONITOR_EVENT_ADDED);
     }
-    iface->board = board;
-
-    *rboard = board;
-    if (revent)
-        *revent = event;
 
     return 1;
-}
-
-static int register_interface(ty_board *board, ty_board_interface *iface)
-{
-    int r;
-
-    ty_mutex_lock(&board->ifaces_lock);
-
-    // Add interface to monitor and board
-    ty_board_interface_ref(iface);
-    r = _hs_array_push(&board->ifaces, iface);
-    if (r < 0) {
-        r = ty_libhs_translate_error(r);
-        goto cleanup;
-    }
-    _hs_htable_add(&board->monitor->ifaces, _hs_htable_hash_ptr(iface->dev),
-                   &iface->monitor_hnode);
-
-    // Update board capabilities
-    for (int i = 0; i < (int)TY_COUNTOF(board->cap2iface); i++) {
-        if (iface->capabilities & (1 << i))
-            board->cap2iface[i] = iface;
-    }
-    board->capabilities |= iface->capabilities;
-
-    r = 0;
-cleanup:
-    ty_mutex_unlock(&board->ifaces_lock);
-    return r;
 }
 
 static int add_interface_for_device(ty_monitor *monitor, hs_device *dev)
 {
     ty_board_interface *iface = NULL;
-    ty_board *board = NULL;
-    ty_monitor_event event = TY_MONITOR_EVENT_ADDED;
     int r;
 
     r = open_new_interface(dev, &iface);
     if (r <= 0)
         goto error;
-    r = update_or_create_board(monitor, iface, &board, &event);
-    if (r <= 0)
-        goto error;
-    r = register_interface(board, iface);
+    r = update_or_create_board(monitor, iface);
     if (r < 0)
         goto error;
 
-    return change_board_status(board, TY_BOARD_STATUS_ONLINE, event);
+    // Everything is OK, keep this interface around
+    _hs_htable_add(&monitor->ifaces, _hs_htable_hash_ptr(iface->dev), &iface->monitor_hnode);
+
+    return 0;
 
 error:
-    if (event == TY_MONITOR_EVENT_ADDED)
-        ty_board_unref(board);
     ty_board_interface_unref(iface);
     return r;
 }
 
 static int remove_interface_with_device(ty_monitor *monitor, hs_device *dev)
 {
-    ty_board_interface *iface;
-    ty_board *board;
+    ty_board_interface *iface = NULL;
     int r;
 
     // Find interface associated with this device
-    iface = find_monitor_interface(monitor, dev);
+    _hs_htable_foreach_hash(cur, &monitor->ifaces, _hs_htable_hash_ptr(dev)) {
+        ty_board_interface *iface_it = _HS_CONTAINER_OF(cur, ty_board_interface, monitor_hnode);
+
+        if (iface_it->dev == dev) {
+            iface = iface_it;
+            break;
+        }
+    }
     if (!iface)
         return 0;
-    board = iface->board;
 
     // Unregister from monitor
     _hs_htable_remove(&iface->monitor_hnode);
     ty_board_interface_unref(iface);
 
-    ty_mutex_lock(&board->ifaces_lock);
+    for (size_t i = 0; i < monitor->boards.count; i++) {
+        ty_board *board = monitor->boards.values[i];
+        bool changed = false;
 
-    // Unregister from board and update capabilities
-    for (size_t i = 0; i < board->ifaces.count; i++) {
-        if (board->ifaces.values[i] == iface) {
-            _hs_array_remove(&board->ifaces, i, 1);
-            break;
+        ty_mutex_lock(&board->ifaces_lock);
+
+        // Find and unregister from board
+        for (size_t j = 0; j < board->ifaces.count; j++) {
+            if (board->ifaces.values[j] == iface) {
+                _hs_array_remove(&board->ifaces, j, 1);
+                changed = true;
+                break;
+            }
         }
-    }
-    ty_board_interface_unref(iface);
-    memset(board->cap2iface, 0, sizeof(board->cap2iface));
-    board->capabilities &= 1 << TY_BOARD_CAPABILITY_UNIQUE;
-    for (size_t i = 0; i < board->ifaces.count; i++) {
-        ty_board_interface *iface_it = board->ifaces.values[i];
-
-        for (unsigned int j = 0; j < TY_COUNTOF(board->cap2iface); j++) {
-            if (iface_it->capabilities & (1 << j))
-                board->cap2iface[j] = iface_it;
+        if (!changed) {
+            ty_mutex_unlock(&board->ifaces_lock);
+            continue;
         }
-        board->capabilities |= iface_it->capabilities;
+        ty_board_interface_unref(iface);
+
+        // Update cababilities
+        memset(board->cap2iface, 0, sizeof(board->cap2iface));
+        board->capabilities &= 1 << TY_BOARD_CAPABILITY_UNIQUE;
+        for (size_t j = 0; j < board->ifaces.count; j++) {
+            ty_board_interface *iface_it = board->ifaces.values[j];
+
+            for (unsigned int k = 0; k < _HS_COUNTOF(board->cap2iface); k++) {
+                if (iface_it->capabilities & (1 << k))
+                    board->cap2iface[k] = iface_it;
+            }
+            board->capabilities |= iface_it->capabilities;
+        }
+
+        ty_mutex_unlock(&board->ifaces_lock);
+
+        // Change status and trigger callbacks
+        if (!board->ifaces.count) {
+            r = close_board(board);
+        } else {
+            r = change_board_status(board, TY_BOARD_STATUS_ONLINE, TY_MONITOR_EVENT_CHANGED);
+        }
+
+        if (r < 0)
+            return r;
     }
 
-    ty_mutex_unlock(&board->ifaces_lock);
-
-    // Change status and trigger callbacks
-    if (!board->ifaces.count) {
-        r = close_board(board);
-    } else {
-        r = change_board_status(board, TY_BOARD_STATUS_ONLINE, TY_MONITOR_EVENT_CHANGED);
-    }
-
-    return r;
+    return 0;
 }
 
 static int device_callback(hs_device *dev, void *udata)
@@ -548,7 +559,7 @@ void ty_monitor_stop(ty_monitor *monitor)
 
     // Clear registered interfaces
     _hs_htable_foreach(cur, &monitor->ifaces) {
-        ty_board_interface *iface_it = ty_container_of(cur, ty_board_interface, monitor_hnode);
+        ty_board_interface *iface_it = _HS_CONTAINER_OF(cur, ty_board_interface, monitor_hnode);
 
         if (iface_it->monitor_hnode.next)
             _hs_htable_remove(&iface_it->monitor_hnode);
@@ -603,11 +614,12 @@ int ty_monitor_refresh(ty_monitor *monitor)
     if (ty_timer_rearm(monitor->timer)) {
         int timer_delay = -1;
 
-        for (size_t i = 0; i < monitor->boards.count; i++) {
+        for (size_t i = monitor->boards.count; i-- > 0;) {
             ty_board *board_it = monitor->boards.values[i];
 
             if (board_it->status == TY_BOARD_STATUS_MISSING) {
-                int board_timeout = ty_adjust_timeout(monitor->drop_delay, board_it->missing_since);
+                int board_timeout = hs_adjust_timeout(monitor->drop_delay, board_it->missing_since);
+
                 /* Drop boards that are about to expire (< 20 ms) to deal with limited timer
                    resolution (e.g. TickCount64() on Windows). */
                 if (board_timeout < 20) {
@@ -654,12 +666,12 @@ int ty_monitor_wait(ty_monitor *monitor, ty_monitor_wait_func *f, void *udata, i
     uint64_t start;
     int r;
 
-    start = ty_millis();
+    start = hs_millis();
     if (monitor->main_thread_id != ty_thread_get_self_id()) {
         ty_mutex_lock(&monitor->refresh_mutex);
         while (!(r = (*f)(monitor, udata))) {
             r = ty_cond_wait(&monitor->refresh_cond, &monitor->refresh_mutex,
-                             ty_adjust_timeout(timeout, start));
+                             hs_adjust_timeout(timeout, start));
             if (!r)
                 break;
         }
@@ -680,7 +692,7 @@ int ty_monitor_wait(ty_monitor *monitor, ty_monitor_wait_func *f, void *udata, i
                     return r;
             }
 
-            r = ty_poll(&set, ty_adjust_timeout(timeout, start));
+            r = ty_poll(&set, hs_adjust_timeout(timeout, start));
         } while (r > 0);
         return r;
     }

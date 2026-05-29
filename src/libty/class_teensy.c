@@ -8,7 +8,7 @@
 
    See the LICENSE file for more details. */
 
-#include "common_priv.h"
+#include "common.h"
 #include "../libhs/device.h"
 #include "../libhs/hid.h"
 #include "../libhs/serial.h"
@@ -131,6 +131,8 @@ static int teensy_load_interface(ty_board_interface *iface)
                         iface->capabilities |= 1 << TY_BOARD_CAPABILITY_UPLOAD;
                         iface->capabilities |= 1 << TY_BOARD_CAPABILITY_RESET;
                     }
+                    if (iface->model == TY_MODEL_TEENSY_40 || iface->model == TY_MODEL_TEENSY_41)
+                        iface->capabilities |= 1 << TY_BOARD_CAPABILITY_RTC;
                 } break;
 
                 case TEENSY_USAGE_PAGE_RAWHID: {
@@ -206,7 +208,7 @@ static int teensy_update_board(ty_board_interface *iface, ty_board *board, bool 
             if (serial_value != 12345)
                 iface->capabilities |= 1 << TY_BOARD_CAPABILITY_UNIQUE;
 
-            r = asprintf(&serial_number, "%"PRIu64, serial_value);
+            r = _hs_asprintf(&serial_number, "%"PRIu64, serial_value);
             if (r < 0) {
                 r = ty_error(TY_ERROR_MEMORY, NULL);
                 goto error;
@@ -229,6 +231,12 @@ static int teensy_update_board(ty_board_interface *iface, ty_board *board, bool 
                 }
             }
         }
+    }
+
+    // Help the monitor make multiple boards for Dual/Triple Serial builds
+    if (iface->dev->type == HS_DEVICE_TYPE_SERIAL) {
+        board->match_iface = iface->dev->iface_number;
+        board->secondary = iface->dev->iface_number / 2;
     }
 
     // Update board description
@@ -256,8 +264,13 @@ static int teensy_update_board(ty_board_interface *iface, ty_board *board, bool 
 
     // Update board unique identifier
     if (!board->id || serial_number) {
-        r = asprintf(&id, "%s-%s", serial_number ? serial_number : "?",
-                     ty_models[TY_MODEL_TEENSY].name);
+        if (board->secondary > 0) {
+            r = _hs_asprintf(&id, "%s-%s@%d", serial_number ? serial_number : "?",
+                             ty_models[TY_MODEL_TEENSY].name, board->secondary);
+        } else {
+            r = _hs_asprintf(&id, "%s-%s", serial_number ? serial_number : "?",
+                             ty_models[TY_MODEL_TEENSY].name);
+        }
         if (r < 0) {
             r = ty_error(TY_ERROR_MEMORY, NULL);
             goto error;
@@ -508,7 +521,7 @@ static ssize_t teensy_serial_write(ty_board_interface *iface, const char *buf, s
             /* SEREMU expects packets of 32 bytes. The terminating NUL marks the end, so
                no binary transfers. */
             for (size_t i = 0; i < size;) {
-                size_t block_size = TY_MIN(SEREMU_TX_SIZE, size - i);
+                size_t block_size = _HS_MIN(SEREMU_TX_SIZE, size - i);
 
                 memset(report, 0, sizeof(report));
                 memcpy(report + 1, buf + i, block_size);
@@ -532,10 +545,9 @@ static ssize_t teensy_serial_write(ty_board_interface *iface, const char *buf, s
 }
 
 static int halfkay_send(hs_port *port, unsigned int halfkay_version, size_t block_size,
-                        size_t addr, const void *data, size_t size, unsigned int timeout)
+                        size_t addr, const void *data, size_t size, unsigned int tries)
 {
     uint8_t buf[2048] = {0};
-    uint64_t start;
 
     ssize_t r;
 
@@ -578,12 +590,11 @@ static int halfkay_send(hs_port *port, unsigned int halfkay_version, size_t bloc
 
     /* We may get errors along the way (while the bootloader works) so try again
        until timeout expires. */
-    start = ty_millis();
     hs_error_mask(HS_ERROR_IO);
 restart:
     r = hs_hid_write(port, buf, size);
-    if (r == HS_ERROR_IO && ty_millis() - start < timeout) {
-        ty_delay(20);
+    if (r == HS_ERROR_IO && --tries) {
+        hs_delay(20);
         goto restart;
     }
     hs_error_unmask();
@@ -596,7 +607,7 @@ restart:
     /* HalfKay generates STALL if you go too fast (translates to EPIPE on Linux), and the
        first write takes longer because it triggers a complete erase of all blocks. */
     if (!addr)
-        ty_delay(200);
+        hs_delay(200);
 
     return 0;
 }
@@ -716,7 +727,7 @@ static int teensy_upload(ty_board_interface *iface, ty_firmware *fw,
         buf_len = ty_firmware_extract(fw, (uint32_t)address, buf, block_size);
 
         if (buf_len) {
-            r = halfkay_send(iface->port, halfkay_version, block_size, address, buf, buf_len, 3000);
+            r = halfkay_send(iface->port, halfkay_version, block_size, address, buf, buf_len, 150);
             if (r < 0)
                 return r;
             uploaded_len += buf_len;
@@ -732,7 +743,7 @@ static int teensy_upload(ty_board_interface *iface, ty_firmware *fw,
     return 0;
 }
 
-static int teensy_reset(ty_board_interface *iface)
+static int teensy_reset(ty_board_interface *iface, int64_t rtc)
 {
     unsigned int halfkay_version;
     size_t min_address, max_address, block_size;
@@ -741,7 +752,30 @@ static int teensy_reset(ty_board_interface *iface)
     if (r < 0)
         return r;
 
-    return halfkay_send(iface->port, halfkay_version, block_size, 0xFFFFFF, NULL, 0, 250);
+    if (rtc >= 0) {
+        uint8_t buf[12];
+        {
+            unsigned long hi = (unsigned long)(rtc >> 17);
+            unsigned long lo = (unsigned long)(rtc << 15);
+
+            buf[0] = 0xB7;
+            buf[1] = 0x31;
+            buf[2] = 0xC2;
+            buf[3] = 0x89;
+            buf[4] = lo & 0xFF;
+            buf[5] = (lo >> 8) & 0xFF;
+            buf[6] = (lo >> 16) & 0xFF;
+            buf[7] = (lo >> 24) & 0xFF;
+            buf[8] = hi & 0xFF;
+            buf[9] = (hi >> 8) & 0xFF;
+            buf[10] = (hi >> 16) & 0xFF;
+            buf[11] = (hi >> 24) & 0xFF;
+        }
+
+        return halfkay_send(iface->port, halfkay_version, block_size, 0xFFFFFF, buf, sizeof(buf), 25);
+    } else {
+        return halfkay_send(iface->port, halfkay_version, block_size, 0xFFFFFF, NULL, 0, 25);
+    }
 }
 
 static int teensy_reboot(ty_board_interface *iface)

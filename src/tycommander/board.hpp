@@ -107,6 +107,7 @@ public:
     QString location() const;
     QString serialNumber() const;
     QString description() const;
+    int secondary() const;
 
     std::vector<BoardInterfaceInfo> interfaces() const;
 
@@ -136,7 +137,7 @@ public:
 
     TaskInterface upload(const QString &filename = QString());
     TaskInterface upload(const std::vector<std::shared_ptr<Firmware>> &fws);
-    TaskInterface upload(const std::vector<std::shared_ptr<Firmware>> &fws, bool reset_after);
+    TaskInterface upload(const std::vector<std::shared_ptr<Firmware>> &fws, int flags);
     TaskInterface reset();
     TaskInterface reboot();
     TaskInterface sendSerial(const QByteArray &buf);
@@ -163,7 +164,7 @@ public slots:
 
     TaskInterface startUpload(const QString &filename = QString());
     TaskInterface startUpload(const std::vector<std::shared_ptr<Firmware>> &fws);
-    TaskInterface startUpload(const std::vector<std::shared_ptr<Firmware>> &fws, bool reset_after);
+    TaskInterface startUpload(const std::vector<std::shared_ptr<Firmware>> &fws, int flags);
     TaskInterface startReset();
     TaskInterface startReboot();
     TaskInterface startSendSerial(const QByteArray &buf);

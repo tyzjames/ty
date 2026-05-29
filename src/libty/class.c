@@ -8,7 +8,7 @@
 
    See the LICENSE file for more details. */
 
-#include "common_priv.h"
+#include "common.h"
 #include "class_priv.h"
 #include "../libhs/array.h"
 #include "../libhs/device.h"
@@ -33,7 +33,7 @@ static const ty_model_info default_models[] = {
     {1, "Teensy 4.1", "imxrt_t41"},
 };
 const ty_model_info *ty_models = default_models;
-const unsigned int ty_models_count = TY_COUNTOF(default_models);
+const unsigned int ty_models_count = _HS_COUNTOF(default_models);
 
 extern const struct _ty_class_vtable _ty_teensy_class_vtable;
 extern const struct _ty_class_vtable _ty_generic_class_vtable;
@@ -41,7 +41,7 @@ const struct _ty_class _ty_classes[] = {
     {"Generic", &_ty_generic_class_vtable},
     {"Teensy", &_ty_teensy_class_vtable}
 };
-const unsigned int _ty_classes_count = TY_COUNTOF(_ty_classes);
+const unsigned int _ty_classes_count = _HS_COUNTOF(_ty_classes);
 
 static hs_match_spec default_match_specs[] = {
     HS_MATCH_VID_PID(0x16C0, 0x0485, (void *)&_ty_teensy_class_vtable), // USB MIDI
@@ -84,6 +84,7 @@ static hs_match_spec default_match_specs[] = {
 };
 const hs_match_spec *_ty_class_match_specs = default_match_specs;
 unsigned int _ty_class_match_specs_count = TY_COUNTOF(default_match_specs);
+static bool data_is_patched = false;
 
 static void free_models(ty_model_info *models)
 {
@@ -96,16 +97,11 @@ static void free_models(ty_model_info *models)
     }
     free(models);
 }
-static void free_current_models(void)
-{
-    if (ty_models != default_models)
-        free_models((ty_model_info *)ty_models);
-}
 
-static void free_current_matches(void)
+static void free_patch_data(void)
 {
-    if (_ty_class_match_specs != default_match_specs)
-        free((hs_match_spec *)_ty_class_match_specs);
+    free_models((ty_model_info *)ty_models);
+    free((hs_match_spec *)_ty_class_match_specs);
 }
 
 struct patch_ini_context {
@@ -173,16 +169,12 @@ int ty_models_load_patch(const char *filename)
     struct patch_ini_context ctx = {0};
     int r;
 
-    if (ty_models == default_models) {
-        ctx.new_models = malloc(sizeof(default_models));
-        if (!ctx.new_models) {
-            r = ty_error(TY_ERROR_MEMORY, NULL);
-            goto error;
-        }
-        memcpy(ctx.new_models, default_models, sizeof(default_models));
-    } else {
-        ctx.new_models = (ty_model_info *)ty_models;
+    ctx.new_models = malloc(sizeof(default_models));
+    if (!ctx.new_models) {
+        r = ty_error(TY_ERROR_MEMORY, NULL);
+        goto error;
     }
+    memcpy(ctx.new_models, default_models, sizeof(default_models));
 
     if (filename) {
         r = ty_ini_walk(filename, patch_ini_callback, &ctx);
@@ -194,16 +186,16 @@ int ty_models_load_patch(const char *filename)
         unsigned int patches_count = 0;
 
         dirs_count += ty_standard_get_paths(TY_PATH_CONFIG_DIRECTORY, "TyTools", dirs + dirs_count,
-                                            (unsigned int)(TY_COUNTOF(dirs) - dirs_count));
+                                            (unsigned int)(_HS_COUNTOF(dirs) - dirs_count));
         dirs_count += ty_standard_get_paths(TY_PATH_EXECUTABLE_DIRECTORY, NULL, dirs + dirs_count,
-                                            (unsigned int)(TY_COUNTOF(dirs) - dirs_count));
+                                            (unsigned int)(_HS_COUNTOF(dirs) - dirs_count));
 
         for (unsigned int i = dirs_count; i-- > 0;) {
             size_t directory_len = strlen(dirs[i]);
 
             r = TY_ERROR_NOT_FOUND;
             ty_error_mask(TY_ERROR_NOT_FOUND);
-            for (unsigned int j = 0; r == TY_ERROR_NOT_FOUND && j < TY_COUNTOF(default_names); j++) {
+            for (unsigned int j = 0; r == TY_ERROR_NOT_FOUND && j < _HS_COUNTOF(default_names); j++) {
                 snprintf(dirs[i] + directory_len, sizeof(dirs[i]) - directory_len,
                          "/%s", default_names[j]);
                 r = ty_ini_walk(dirs[i], patch_ini_callback, &ctx);
@@ -224,35 +216,29 @@ int ty_models_load_patch(const char *filename)
         }
     }
 
-    if (ctx.new_matches.count) {
-        r = _hs_array_grow(&ctx.new_matches, TY_COUNTOF(default_match_specs));
-        if (r < 0) {
-            r = ty_libhs_translate_error(r);
-            goto error;
-        }
-        memcpy(ctx.new_matches.values + ctx.new_matches.count, default_match_specs,
-               sizeof(default_match_specs));
-        ctx.new_matches.count += TY_COUNTOF(default_match_specs);
+    r = _hs_array_grow(&ctx.new_matches, _ty_class_match_specs_count);
+    if (r < 0) {
+        r = ty_libhs_translate_error(r);
+        goto error;
+    }
+    memcpy(ctx.new_matches.values + ctx.new_matches.count, _ty_class_match_specs,
+           sizeof(*_ty_class_match_specs) * _ty_class_match_specs_count);
 
-        if (_ty_class_match_specs == default_match_specs) {
-            atexit(free_current_matches);
-        } else {
-            free((hs_match_spec *)_ty_class_match_specs);
-        }
-        _ty_class_match_specs = ctx.new_matches.values;
-        _ty_class_match_specs_count = (unsigned int)ctx.new_matches.count;
+    if (data_is_patched) {
+        free_patch_data();
+    } else {
+        data_is_patched = true;
+        atexit(free_patch_data);
     }
-    if (ty_models == default_models) {
-        atexit(free_current_models);
-        ty_models = ctx.new_models;
-    }
+    ty_models = ctx.new_models;
+    _ty_class_match_specs = ctx.new_matches.values;
+    _ty_class_match_specs_count = (unsigned int)ctx.new_matches.count + _ty_class_match_specs_count;
 
     return 0;
 
 error:
     _hs_array_release(&ctx.new_matches);
-    if (ctx.new_models != ty_models)
-        free_models(ctx.new_models);
+    free_models(ctx.new_models);
     return (int)r;
 }
 

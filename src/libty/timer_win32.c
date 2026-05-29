@@ -8,7 +8,7 @@
 
    See the LICENSE file for more details. */
 
-#include "common_priv.h"
+#include "common.h"
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include "timer.h"
@@ -42,7 +42,7 @@ int ty_timer_new(ty_timer **rtimer)
 
     timer->event = CreateEvent(NULL, TRUE, FALSE, NULL);
     if (!timer->event) {
-        r = ty_error(TY_ERROR_SYSTEM, "CreateEvent() failed: %s", ty_win32_strerror(0));
+        r = ty_error(TY_ERROR_SYSTEM, "CreateEvent() failed: %s", hs_win32_strerror(0));
         goto error;
     }
 
@@ -78,7 +78,7 @@ void ty_timer_get_descriptors(const ty_timer *timer, ty_descriptor_set *set, int
 
 static void __stdcall timer_callback(void *udata, BOOLEAN timer_or_wait)
 {
-    TY_UNUSED(timer_or_wait);
+    _HS_UNUSED(timer_or_wait);
 
     ty_timer *timer = udata;
 
@@ -127,7 +127,7 @@ int ty_timer_set(ty_timer *timer, int value, int flags)
         if (!timer->h) {
             ret = CreateTimerQueueTimer(&timer->h, NULL, timer_callback, timer, due, period, 0);
             if (!ret) {
-                r = ty_error(TY_ERROR_SYSTEM, "CreateTimerQueueTimer() failed: %s", ty_win32_strerror(0));
+                r = ty_error(TY_ERROR_SYSTEM, "CreateTimerQueueTimer() failed: %s", hs_win32_strerror(0));
                 goto cleanup;
             }
 
@@ -152,7 +152,7 @@ int ty_timer_set(ty_timer *timer, int value, int flags)
 
     ret = ChangeTimerQueueTimer(NULL, timer->h, due, period);
     if (!ret) {
-        r = ty_error(TY_ERROR_SYSTEM, "ChangeTimerQueueTimer() failed: %s", ty_win32_strerror(0));
+        r = ty_error(TY_ERROR_SYSTEM, "ChangeTimerQueueTimer() failed: %s", hs_win32_strerror(0));
         goto cleanup;
     }
 

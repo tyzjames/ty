@@ -13,7 +13,7 @@
 
 #include "common.h"
 
-HS_BEGIN_C
+_HS_BEGIN_C
 
 #ifdef _WIN32
 /**
@@ -78,6 +78,15 @@ typedef struct hs_poll_source {
  * @return This function returns a mononotic time value in milliseconds.
  */
 uint64_t hs_millis(void);
+
+/**
+ * @ingroup misc
+ * @brief Suspend execution of calling thread until specified time has passed.
+ *
+ * @param ms Wait time in milliseconds.
+ *
+ */
+void hs_delay(unsigned int ms);
 
 /**
  * @ingroup misc
@@ -186,6 +195,6 @@ uint32_t hs_darwin_version(void);
  */
 int hs_poll(hs_poll_source *sources, unsigned int count, int timeout);
 
-HS_END_C
+_HS_END_C
 
 #endif

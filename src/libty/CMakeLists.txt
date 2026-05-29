@@ -14,13 +14,11 @@ set(LIBTY_SOURCES board.c
                   class.c
                   class.h
                   class_priv.h
+                  class_default.c
                   class_generic.c
                   class_teensy.c
                   common.c
                   common.h
-                  common_priv.h
-                  compat.c
-                  compat_priv.h
                   firmware.c
                   firmware.h
                   firmware_elf.c
@@ -66,13 +64,14 @@ else()
     message(FATAL_ERROR "Unsupported platform")
 endif()
 
-configure_file(version.h.in version.h)
-
-include(CheckSymbolExists)
-check_symbol_exists(asprintf stdio.h _TY_HAVE_ASPRINTF)
-if(NOT WIN32)
-    check_symbol_exists(pthread_cond_timedwait_relative_np pthread.h _TY_HAVE_PTHREAD_COND_TIMEDWAIT_RELATIVE_NP)
+if(CONFIG_VARIANT)
+    if(EXISTS "${CONFIG_VARIANT_PATH}/class_default.c")
+        list(REMOVE_ITEM LIBTY_SOURCES class_default.c)
+        list(APPEND LIBTY_SOURCES "${CONFIG_VARIANT_PATH}/class_default.c")
+    endif()
 endif()
+
+configure_file(version.h.in version.h)
 configure_file(config.h.in config.h)
 
 list(APPEND LIBTY_LINK_LIBRARIES libhs)
@@ -86,7 +85,3 @@ target_link_libraries(libty PRIVATE ${LIBTY_LINK_LIBRARIES})
 target_include_directories(libty PUBLIC ${CMAKE_CURRENT_BINARY_DIR})
 target_compile_definitions(libty PUBLIC _TY_HAVE_CONFIG_H)
 enable_unity_build(libty)
-
-configure_file(libty.h.in libty.h.in)
-add_amalgamated_file(libty "${CMAKE_BINARY_DIR}/libty.h" "${CMAKE_CURRENT_BINARY_DIR}/libty.h.in"
-                     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})

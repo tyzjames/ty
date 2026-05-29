@@ -14,7 +14,7 @@
 #include "common.h"
 #include "class.h"
 
-TY_C_BEGIN
+_HS_BEGIN_C
 
 struct ty_descriptor_set;
 struct hs_device;
@@ -32,6 +32,7 @@ typedef enum ty_board_capability {
     TY_BOARD_CAPABILITY_RUN,
     TY_BOARD_CAPABILITY_UPLOAD,
     TY_BOARD_CAPABILITY_RESET,
+    TY_BOARD_CAPABILITY_RTC,
     TY_BOARD_CAPABILITY_REBOOT,
     TY_BOARD_CAPABILITY_SERIAL,
 
@@ -47,7 +48,10 @@ typedef enum ty_board_status {
 enum {
     TY_UPLOAD_WAIT = 1,
     TY_UPLOAD_NORESET = 2,
-    TY_UPLOAD_NOCHECK = 4
+    TY_UPLOAD_NOCHECK = 4,
+    TY_UPLOAD_NORTC = 8,
+    TY_UPLOAD_RTC_UTC = 16,
+    TY_UPLOAD_DELEGATE = 32
 };
 
 #define TY_UPLOAD_MAX_FIRMWARES 256
@@ -74,6 +78,7 @@ const char *ty_board_get_tag(const ty_board *board);
 const char *ty_board_get_location(const ty_board *board);
 const char *ty_board_get_serial_number(const ty_board *board);
 const char *ty_board_get_description(const ty_board *board);
+int ty_board_get_secondary(const ty_board *board);
 
 void ty_board_set_model(ty_board *board, ty_model model);
 ty_model ty_board_get_model(const ty_board *board);
@@ -93,7 +98,7 @@ ssize_t ty_board_serial_read(ty_board *board, char *buf, size_t size, int timeou
 ssize_t ty_board_serial_write(ty_board *board, const char *buf, size_t size);
 
 int ty_board_upload(ty_board *board, struct ty_firmware *fw, ty_board_upload_progress_func *pf, void *udata);
-int ty_board_reset(ty_board *board);
+int ty_board_reset(ty_board *board, int64_t rtc);
 int ty_board_reboot(ty_board *board);
 
 ty_board_interface *ty_board_interface_ref(ty_board_interface *iface);
@@ -118,6 +123,6 @@ int ty_reboot(ty_board *board, struct ty_task **rtask);
 int ty_send(ty_board *board, const char *buf, size_t size, struct ty_task **rtask);
 int ty_send_file(ty_board *board, const char *filename, struct ty_task **rtask);
 
-TY_C_END
+_HS_END_C
 
 #endif

@@ -8,10 +8,11 @@
 
    See the LICENSE file for more details. */
 
-#include "common_priv.h"
+#include "common.h"
 #ifndef _WIN32
     #include <sys/stat.h>
 #endif
+#include <time.h>
 #include "../libhs/device.h"
 #include "board_priv.h"
 #include "class_priv.h"
@@ -26,6 +27,7 @@ static const char *capability_names[] = {
     "run",
     "upload",
     "reset",
+    "rtc",
     "reboot",
     "serial"
 };
@@ -203,6 +205,12 @@ const char *ty_board_get_description(const ty_board *board)
     return board->description;
 }
 
+int ty_board_get_secondary(const ty_board *board)
+{
+    assert(board);
+    return board->secondary;
+}
+
 void ty_board_set_model(ty_board *board, ty_model model)
 {
     assert(board);
@@ -248,7 +256,7 @@ int ty_board_list_interfaces(ty_board *board, ty_board_list_interfaces_func *f, 
 int ty_board_open_interface(ty_board *board, ty_board_capability cap, ty_board_interface **riface)
 {
     assert(board);
-    assert((int)cap < (int)TY_COUNTOF(board->cap2iface));
+    assert((int)cap < (int)_HS_COUNTOF(board->cap2iface));
     assert(riface);
 
     ty_board_interface *iface;
@@ -281,7 +289,7 @@ struct wait_for_context {
 
 static int wait_for_callback(ty_monitor *monitor, void *udata)
 {
-    TY_UNUSED(monitor);
+    _HS_UNUSED(monitor);
 
     struct wait_for_context *ctx = udata;
     ty_board *board = ctx->board;
@@ -375,7 +383,7 @@ cleanup:
     return r;
 }
 
-int ty_board_reset(ty_board *board)
+int ty_board_reset(ty_board *board, int64_t rtc)
 {
     assert(board);
 
@@ -388,7 +396,7 @@ int ty_board_reset(ty_board *board)
     if (!r)
         return ty_error(TY_ERROR_MODE, "Cannot reset board '%s'", board->tag);
 
-    r = (*iface->class_vtable->reset)(iface);
+    r = (*iface->class_vtable->reset)(iface, rtc);
 
     ty_board_interface_close(iface);
     return r;
@@ -554,7 +562,7 @@ static int select_compatible_firmware(ty_board *board, ty_firmware **fws, unsign
     unsigned int fw_models_count = 0;
 
     for (unsigned int i = 0; i < fws_count; i++) {
-        fw_models_count = ty_firmware_identify(fws[i], fw_models, TY_COUNTOF(fw_models));
+        fw_models_count = ty_firmware_identify(fws[i], fw_models, _HS_COUNTOF(fw_models));
 
         for (unsigned int j = 0; j < fw_models_count; j++) {
             if (fw_models[j] == board->model) {
@@ -587,8 +595,8 @@ static int select_compatible_firmware(ty_board *board, ty_firmware **fws, unsign
 static int upload_progress_callback(const ty_board *board, const ty_firmware *fw,
                                     size_t uploaded_size, size_t flash_size, void *udata)
 {
-    TY_UNUSED(board);
-    TY_UNUSED(udata);
+    _HS_UNUSED(board);
+    _HS_UNUSED(udata);
 
     if (!uploaded_size) {
         ty_log(TY_LOG_INFO, "Firmware: %s", fw->name);
@@ -610,6 +618,33 @@ static int upload_progress_callback(const ty_board *board, const ty_firmware *fw
 static void unref_upload_firmware(void *ptr)
 {
     ty_firmware_unref(ptr);
+}
+
+static int64_t get_time(bool local)
+{
+#ifdef _WIN32
+    __time64_t now = 0;
+    struct tm ti1 = {0};
+    struct tm ti2 = {0};
+
+    _time64(&now);
+    if (local) {
+        _gmtime64_s(&ti1, &now);
+        _localtime64_s(&ti2, &now);
+        now += _mktime64(&ti2) - _mktime64(&ti1);
+    }
+#else
+    time_t now = 0;
+    struct tm ti = {0};
+
+    now = time(NULL);
+    if (local) {
+        localtime_r(&now, &ti);
+        now += ti.tm_gmtoff;
+    }
+#endif
+
+    return (int64_t)now;
 }
 
 static int run_upload(ty_task *task)
@@ -645,7 +680,7 @@ static int run_upload(ty_task *task)
 
 wait:
     r = ty_board_wait_for(board, TY_BOARD_CAPABILITY_UPLOAD,
-                           flags & TY_UPLOAD_WAIT ? -1 : MANUAL_REBOOT_DELAY);
+                          flags & TY_UPLOAD_WAIT ? -1 : MANUAL_REBOOT_DELAY);
     if (r < 0)
         return r;
     if (!r) {
@@ -661,15 +696,30 @@ wait:
             return r;
     }
 
-    r = ty_board_upload(board, fw, upload_progress_callback, NULL);
-    if (r < 0)
-        return r;
-
-    if (!(flags & TY_UPLOAD_NORESET)) {
-        ty_log(TY_LOG_INFO, "Sending reset command");
-        r = ty_board_reset(board);
+    if (!(flags & TY_UPLOAD_DELEGATE)) {
+        r = ty_board_upload(board, fw, upload_progress_callback, NULL);
         if (r < 0)
             return r;
+    }
+
+    if (!(flags & TY_UPLOAD_NORESET)) {
+        if (flags & TY_UPLOAD_DELEGATE) {
+            ty_log(TY_LOG_INFO, "Waiting for Teensy Loader");
+        } else {
+            if (ty_board_has_capability(board, TY_BOARD_CAPABILITY_RTC) && !(flags & TY_UPLOAD_NORTC)) {
+                bool utc = flags & TY_UPLOAD_RTC_UTC;
+                int64_t now = get_time(!utc);
+
+                ty_log(TY_LOG_INFO, "Sending reset command (with RTC)");
+                r = ty_board_reset(board, now);
+            } else {
+                ty_log(TY_LOG_INFO, "Sending reset command");
+                r = ty_board_reset(board, -1);
+            }
+            if (r < 0)
+                return r;
+
+        }
 
         r = ty_board_wait_for(board, TY_BOARD_CAPABILITY_RUN, FINAL_TASK_TIMEOUT);
         if (r < 0)
@@ -757,7 +807,7 @@ static int run_reset(ty_task *task)
     }
 
     ty_log(TY_LOG_INFO, "Sending reset command");
-    r = ty_board_reset(board);
+    r = ty_board_reset(board, -1);
     if (r < 0)
         return r;
 
@@ -856,7 +906,7 @@ static int run_send(ty_task *task)
 
         ty_progress("Sending", written, size);
 
-        block_size = TY_MIN(1024, size - written);
+        block_size = _HS_MIN(1024, size - written);
         r = ty_board_serial_write(board, buf + written, block_size);
         if (r < 0)
             return (int)r;
@@ -967,6 +1017,7 @@ int ty_send_file(ty_board *board, const char *filename, ty_task **rtask)
     task->u.send_file.board = ty_board_ref(board);
     task->task_finalize = finalize_send_file;
 
+restart:
 #ifdef _WIN32
     task->u.send_file.fp = fopen(filename, "rb");
 #else
@@ -974,6 +1025,10 @@ int ty_send_file(ty_board *board, const char *filename, ty_task **rtask)
 #endif
     if (!task->u.send_file.fp) {
         switch (errno) {
+            case EINTR: {
+                goto restart;
+            } break;
+
             case EACCES: {
                 r = ty_error(TY_ERROR_ACCESS, "Permission denied for '%s'", filename);
             } break;

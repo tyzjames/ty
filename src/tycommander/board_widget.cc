@@ -21,6 +21,22 @@ BoardWidget::BoardWidget(QWidget *parent)
     : QWidget(parent)
 {
     setupUi(this);
+
+    QGridLayout *layout = static_cast<QGridLayout *>(this->layout());
+
+    plusIcon = new QLabel(this);
+    plusIcon->setMinimumSize(16, 16);
+    plusIcon->setMaximumSize(16, 16);
+    plusIcon->setScaledContents(true);
+    plusIcon->setStyleSheet("QLabel { background-color: red; color: white; border-radius: 8px; }");
+    plusIcon->setAlignment(Qt::AlignCenter);
+    {
+        QFont font;
+        font.setPointSize(7);
+        plusIcon->setFont(font);
+    }
+    plusIcon->setVisible(false);
+    layout->addWidget(plusIcon, 0, 0, Qt::AlignRight | Qt::AlignBottom);
 }
 
 void BoardWidget::setIcon(const QIcon &icon)
@@ -46,6 +62,16 @@ void BoardWidget::setProgress(unsigned int progress, unsigned int total)
     }
 }
 
+void BoardWidget::setSecondary(int secondary)
+{
+    if (secondary) {
+        plusIcon->setText(QString::number(secondary));
+        plusIcon->setVisible(true);
+    } else {
+        plusIcon->setVisible(false);
+    }
+}
+
 QRect BoardWidget::tagGeometry() const
 {
     auto geometry = tagLabel->geometry();
@@ -65,6 +91,7 @@ void BoardItemDelegate::paint(QPainter *painter, const QStyleOptionViewItem &opt
     widget_.setModel(board->modelName());
     widget_.setTag(board->tag());
     widget_.setStatus(board->statusText());
+    widget_.setSecondary(board->secondary());
 
     auto task = board->task();
     if (task.status() == TY_TASK_STATUS_RUNNING) {

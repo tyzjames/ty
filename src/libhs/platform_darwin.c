@@ -12,6 +12,7 @@
 #include <mach/mach_time.h>
 #include <sys/select.h>
 #include <sys/utsname.h>
+#include <time.h>
 #include "platform.h"
 
 uint64_t hs_millis(void)
@@ -21,6 +22,27 @@ uint64_t hs_millis(void)
         mach_timebase_info(&tb);
 
     return (uint64_t)mach_absolute_time() * tb.numer / tb.denom / 1000000;
+}
+
+void hs_delay(unsigned int ms)
+{
+    struct timespec t, rem;
+    int r;
+
+    t.tv_sec = (int)(ms / 1000);
+    t.tv_nsec = (int)((ms % 1000) * 1000000);
+
+    do {
+        r = nanosleep(&t, &rem);
+        if (r < 0) {
+            if (errno != EINTR) {
+                hs_error(HS_ERROR_SYSTEM, "nanosleep() failed: %s", strerror(errno));
+                return;
+            }
+
+            t = rem;
+        }
+    } while (r);
 }
 
 int hs_poll(hs_poll_source *sources, unsigned int count, int timeout)

@@ -23,9 +23,11 @@ static void print_upload_usage(FILE *f)
     fprintf(f, "\n");
 
     fprintf(f, "Upload options:\n"
-               "   -w, --wait               Wait for the bootloader instead of rebooting\n"
+               "   -w, --wait               Wait for the bootloader instead of rebooting\n\n"
                "       --nocheck            Force upload even if the board is not compatible\n"
                "       --noreset            Do not reset the device once the upload is finished\n"
+               "       --rtc <MODE>         Set RTC if supported: local (default), utc, none\n"
+               "       --delegate           Reboot the board and let Teensy Loader do the rest\n\n"
                "   -f, --format <format>    Firmware file format (autodetected by default)\n\n"
                "You can pass multiple firmwares, and the first compatible one will be used.\n\n"
                "Use '-' to read firmware from stdin, in which case you need to specificy the\n"
@@ -58,6 +60,28 @@ int upload(int argc, char *argv[])
             upload_flags |= TY_UPLOAD_NOCHECK;
         } else if (strcmp(opt, "--noreset") == 0) {
             upload_flags |= TY_UPLOAD_NORESET;
+        } else if (strcmp(opt, "--rtc") == 0) {
+            const char *value = ty_optline_get_value(&optl);
+            if (!value) {
+                ty_log(TY_LOG_ERROR, "Option '--rtc' takes an argument");
+                print_upload_usage(stderr);
+                return EXIT_FAILURE;
+            }
+
+            if (strcmp(value, "local") == 0) {
+                upload_flags &= ~TY_UPLOAD_NORTC;
+            } else if (strcmp(value, "utc") == 0) {
+                upload_flags &= ~TY_UPLOAD_NORTC;
+                upload_flags |= TY_UPLOAD_RTC_UTC;
+            } else if (strcmp(value, "none") == 0) {
+                upload_flags |= TY_UPLOAD_NORTC;
+            } else {
+                ty_log(TY_LOG_ERROR, "--rtc must be one of: local, utc or none");
+                print_upload_usage(stderr);
+                return EXIT_FAILURE;
+            }
+        } else if (strcmp(opt, "--delegate") == 0) {
+            upload_flags |= TY_UPLOAD_DELEGATE;
         } else if (strcmp(opt, "--format") == 0 || strcmp(opt, "-f") == 0) {
             upload_firmware_format = ty_optline_get_value(&optl);
             if (!upload_firmware_format) {
@@ -73,8 +97,8 @@ int upload(int argc, char *argv[])
 
     fws_count = 0;
     while ((opt = ty_optline_consume_non_option(&optl))) {
-        if (fws_count >= TY_COUNTOF(fws)) {
-            ty_log(TY_LOG_WARNING, "Too many firmwares, considering only %zu files", TY_COUNTOF(fws));
+        if (fws_count >= _HS_COUNTOF(fws)) {
+            ty_log(TY_LOG_WARNING, "Too many firmwares, considering only %zu files", _HS_COUNTOF(fws));
             break;
         }
 

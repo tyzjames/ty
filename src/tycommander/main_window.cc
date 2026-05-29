@@ -314,7 +314,7 @@ void MainWindow::selectNextBoard()
         return;
 
     auto indexes = boardList->selectionModel()->selectedIndexes();
-    qSort(indexes);
+    std::sort(indexes.begin(), indexes.end());
 
     QModelIndex new_index;
     if (indexes.isEmpty()) {
@@ -345,7 +345,7 @@ void MainWindow::selectPreviousBoard()
         return;
 
     auto indexes = boardList->selectionModel()->selectedIndexes();
-    qSort(indexes);
+    std::sort(indexes.begin(), indexes.end());
 
     QModelIndex new_index;
     if (indexes.isEmpty()) {
@@ -382,7 +382,7 @@ void MainWindow::uploadToSelection()
 
     unsigned int fws_count = 0;
     for (auto &board: selected_boards_) {
-        if (!board->firmware().isEmpty()) {
+        if (!board->secondary() && !board->firmware().isEmpty()) {
             fws_count++;
             board->startUpload();
         }
@@ -417,8 +417,10 @@ void MainWindow::uploadNewToSelection()
         return;
     }
 
-    for (auto &board: selected_boards_)
-        board->startUpload(fws);
+    for (auto &board: selected_boards_) {
+        if (!board->secondary())
+            board->startUpload(fws);
+    }
 }
 
 void MainWindow::dropAssociationForSelection()
@@ -429,14 +431,28 @@ void MainWindow::dropAssociationForSelection()
 
 void MainWindow::resetSelection()
 {
-    for (auto &board: selected_boards_)
-        board->startReset();
+    QSet<QString> handled_locations;
+
+    for (auto &board: selected_boards_) {
+        int count = handled_locations.count();
+        handled_locations.insert(board->location());
+
+        if (handled_locations.count() > count)
+            board->startReset();
+    }
 }
 
 void MainWindow::rebootSelection()
 {
-    for (auto &board: selected_boards_)
-        board->startReboot();
+    QSet<QString> handled_locations;
+
+    for (auto &board: selected_boards_) {
+        int count = handled_locations.count();
+        handled_locations.insert(board->location());
+
+        if (handled_locations.count() > count)
+            board->startReboot();
+    }
 }
 
 void MainWindow::sendToSelectedBoards(const QString &s)
@@ -652,10 +668,15 @@ void MainWindow::fixEmptySelection(const QModelIndex &parent, int start, int end
     Q_UNUSED(parent);
     Q_UNUSED(end);
 
-    if (selected_boards_.empty() && monitor_->rowCount()) {
-        if (start >= monitor_->rowCount())
-            start = monitor_->rowCount() - 1;
-        boardList->setCurrentIndex(monitor_->index(start, 0));
+    if (selected_boards_.empty()) {
+        for (int i = start; i <= end && i < monitor_->rowCount(); i++) {
+            auto board = monitor_->board(i);
+
+            if (!board->secondary()) {
+                boardList->setCurrentIndex(monitor_->index(i, 0));
+                break;
+            }
+        }
     }
 }
 
@@ -842,7 +863,8 @@ void MainWindow::selectionChanged(const QItemSelection &newsel, const QItemSelec
     current_board_ = nullptr;
 
     auto indexes = boardList->selectionModel()->selectedIndexes();
-    qSort(indexes);
+    std::sort(indexes.begin(), indexes.end());
+
     for (auto &idx: indexes) {
         if (idx.column() == 0)
             selected_boards_.push_back(Monitor::boardFromModel(monitor_, idx));
@@ -909,8 +931,8 @@ void MainWindow::refreshActions()
     bool upload = false, reset = false, reboot = false, send = false;
     for (auto &board: selected_boards_) {
         if (board->taskStatus() == TY_TASK_STATUS_READY) {
-            upload |= board->hasCapability(TY_BOARD_CAPABILITY_UPLOAD) ||
-                      board->hasCapability(TY_BOARD_CAPABILITY_REBOOT);
+            upload |= !board->secondary() && (board->hasCapability(TY_BOARD_CAPABILITY_UPLOAD) ||
+                                              board->hasCapability(TY_BOARD_CAPABILITY_REBOOT));
             reset |= board->hasCapability(TY_BOARD_CAPABILITY_RESET) ||
                      board->hasCapability(TY_BOARD_CAPABILITY_REBOOT);
             reboot |= board->hasCapability(TY_BOARD_CAPABILITY_REBOOT);

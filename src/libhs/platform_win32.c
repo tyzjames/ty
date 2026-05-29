@@ -13,43 +13,16 @@
 #include <windows.h>
 #include "platform.h"
 
-typedef ULONGLONG WINAPI GetTickCount64_func(void);
 typedef LONG NTAPI RtlGetVersion_func(OSVERSIONINFOW *info);
-
-static ULONGLONG WINAPI GetTickCount64_resolve(void);
-static GetTickCount64_func *GetTickCount64_ = GetTickCount64_resolve;
-static LONG NTAPI RtlGetVersion_resolve(OSVERSIONINFOW *info);
-static RtlGetVersion_func *RtlGetVersion_ = RtlGetVersion_resolve;
-
-static ULONGLONG WINAPI GetTickCount64_fallback(void)
-{
-    static LARGE_INTEGER freq;
-    LARGE_INTEGER now;
-    BOOL ret _HS_POSSIBLY_UNUSED;
-
-    if (!freq.QuadPart) {
-        ret = QueryPerformanceFrequency(&freq);
-        assert(ret);
-    }
-
-    ret = QueryPerformanceCounter(&now);
-    assert(ret);
-
-    return (ULONGLONG)now.QuadPart * 1000 / (ULONGLONG)freq.QuadPart;
-}
-
-static ULONGLONG WINAPI GetTickCount64_resolve(void)
-{
-    GetTickCount64_ = (GetTickCount64_func *)GetProcAddress(GetModuleHandle("kernel32.dll"), "GetTickCount64");
-    if (!GetTickCount64_)
-        GetTickCount64_ = GetTickCount64_fallback;
-
-    return GetTickCount64_();
-}
 
 uint64_t hs_millis(void)
 {
-    return GetTickCount64_();
+    return GetTickCount64();
+}
+
+void hs_delay(unsigned int ms)
+{
+    Sleep(ms);
 }
 
 int hs_poll(hs_poll_source *sources, unsigned int count, int timeout)
@@ -102,13 +75,6 @@ const char *hs_win32_strerror(DWORD err)
     return buf;
 }
 
-static LONG NTAPI RtlGetVersion_resolve(OSVERSIONINFOW *info)
-{
-    RtlGetVersion_ = (RtlGetVersion_func *)GetProcAddress(GetModuleHandle("ntdll.dll"),
-                                                          "RtlGetVersion");
-    return RtlGetVersion_(info);
-}
-
 uint32_t hs_win32_version(void)
 {
     static uint32_t version;
@@ -118,7 +84,10 @@ uint32_t hs_win32_version(void)
 
         // Windows 8.1 broke GetVersionEx, so bypass the intermediary
         info.dwOSVersionInfoSize = sizeof(info);
-        RtlGetVersion_(&info);
+
+        RtlGetVersion_func *RtlGetVersion =
+            (RtlGetVersion_func *)GetProcAddress(GetModuleHandle("ntdll.dll"), "RtlGetVersion");
+        RtlGetVersion(&info);
 
         version = info.dwMajorVersion * 100 + info.dwMinorVersion;
     }

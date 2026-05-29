@@ -99,7 +99,7 @@ static int redirect_stdout(int *routfd)
 
 static unsigned int __stdcall stdin_thread(void *udata)
 {
-    TY_UNUSED(udata);
+    _HS_UNUSED(udata);
 
     DWORD len;
     BOOL success;
@@ -136,15 +136,15 @@ static int start_stdin_thread(void)
 {
     monitor_input_available = CreateEvent(NULL, TRUE, FALSE, NULL);
     if (!monitor_input_available)
-        return ty_error(TY_ERROR_SYSTEM, "CreateEvent() failed: %s", ty_win32_strerror(0));
+        return ty_error(TY_ERROR_SYSTEM, "CreateEvent() failed: %s", hs_win32_strerror(0));
 
     monitor_input_processed = CreateEvent(NULL, TRUE, TRUE, NULL);
     if (!monitor_input_processed)
-        return ty_error(TY_ERROR_SYSTEM, "CreateEvent() failed: %s", ty_win32_strerror(0));
+        return ty_error(TY_ERROR_SYSTEM, "CreateEvent() failed: %s", hs_win32_strerror(0));
 
     monitor_input_thread = (HANDLE)_beginthreadex(NULL, 0, stdin_thread, NULL, 0, NULL);
     if (!monitor_input_thread)
-        return ty_error(TY_ERROR_SYSTEM, "_beginthreadex() failed: %s", ty_win32_strerror(0));
+        return ty_error(TY_ERROR_SYSTEM, "_beginthreadex() failed: %s", hs_win32_strerror(0));
 
     return 0;
 }
