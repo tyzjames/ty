@@ -82,6 +82,8 @@ add_library(libty STATIC ${LIBTY_SOURCES})
 set_target_properties(libty PROPERTIES OUTPUT_NAME ty)
 target_link_libraries(libty PRIVATE ${LIBTY_LINK_LIBRARIES})
 # We need that for config.h
-target_include_directories(libty PUBLIC ${CMAKE_CURRENT_BINARY_DIR})
+target_include_directories(libty PUBLIC ${CMAKE_CURRENT_BINARY_DIR}
+                                   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
+                                           ${CMAKE_SOURCE_DIR}/src/libhs)
 target_compile_definitions(libty PUBLIC _TY_HAVE_CONFIG_H)
 enable_unity_build(libty)
